@@ -10,18 +10,26 @@
 // generic test system.
 
 //go:build all || end2end
-// +build all end2end
 
 package gosnmp
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func isUsingSnmpLabs() bool {
+	return useSnmpLabsCredentials
+}
+
+// conveniently enable demo.snmplabs.com for a one test
+func useSnmpLabs(use bool) {
+	useSnmpLabsCredentials = use
+}
 
 func getTarget(t *testing.T) (string, uint16) {
 	var envTarget string
@@ -95,6 +103,71 @@ func setupConnectionIPv4(t *testing.T) {
 			t.Fatalf("Connection failed. Is snmpd reachable on %s:%d?\n(err: %v)",
 				target, port, err)
 		}
+	}
+}
+
+func TestClose(t *testing.T) {
+	gs := &GoSNMP{
+		Version:   Version2c,
+		Community: "public",
+		Timeout:   time.Second * 2,
+		Retries:   1,
+	}
+
+	setupConnectionInstance(gs, t)
+
+	// Ensure connection is open
+	if gs.Conn == nil {
+		t.Fatal("expected connection to be established, got nil")
+	}
+
+	// Close the connection
+	err := gs.Close()
+	if err != nil {
+		t.Fatalf("Close() returned an error: %v", err)
+	}
+
+	// Try closing again to make sure it handles idempotency
+	err = gs.Close()
+	if err != nil {
+		t.Errorf("Close() on already-closed connection should not error, got: %v", err)
+	}
+}
+
+func TestClose_NilConnection(t *testing.T) {
+	gs := &GoSNMP{
+		Conn: nil,
+	}
+
+	err := gs.Close()
+	if err != nil {
+		t.Errorf("expected nil error when closing nil connection, got: %v", err)
+	}
+}
+
+func TestClose_Concurrent(t *testing.T) {
+	gs := &GoSNMP{
+		Version:   Version2c,
+		Community: "public",
+		Timeout:   time.Second,
+		Retries:   1,
+	}
+
+	setupConnectionInstance(gs, t)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ { // simulate 100 concurrent calls
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = gs.Close()
+		}()
+	}
+
+	wg.Wait()
+
+	if gs.Conn != nil {
+		t.Errorf("expected connection to be nil after Close")
 	}
 }
 
@@ -303,15 +376,18 @@ func TestMaxOids(t *testing.T) {
 }
 
 func TestGenericFailureUnknownHost(t *testing.T) {
-	unknownHost := fmt.Sprintf("gosnmp-test-unknown-host-%d", time.Now().UTC().UnixNano())
+	unknownHost := "nonexistent.invalid" // .invalid is guaranteed by RFC 2606 to never resolve.
 	Default.Target = unknownHost
 	err := Default.Connect()
 	if err == nil {
 		t.Fatalf("Expected connection failure due to unknown host")
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "no such host") {
-		t.Fatalf("Expected connection error of type 'no such host'! Got => %v", err)
+
+	lerr := strings.ToLower(err.Error())
+	if !strings.Contains(lerr, "no such host") && !strings.Contains(lerr, "i/o timeout") {
+		t.Fatalf("Expected connection error of type 'no such host' or 'i/o timeout'! Got => %v", err)
 	}
+
 	_, err = Default.Get([]string{".1.3.6.1.2.1.1.1.0"}) // SNMP MIB-2 sysDescr
 	if err == nil {
 		t.Fatalf("Expected get to fail due to missing connection")

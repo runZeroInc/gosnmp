@@ -1,8 +1,12 @@
+// Copyright 2020 The GoSNMP Authors. All rights reserved.  Use of this
+// source code is governed by a BSD-style license that can be found in the
+// LICENSE file.
+
 package gosnmp
 
 import (
 	"encoding/hex"
-	"io/ioutil"
+	"io"
 	"log"
 	"testing"
 
@@ -49,42 +53,7 @@ func packetSHA224AuthenticationParams(t *testing.T) string {
 	return string(params)
 }
 
-func TestAuthenticationSHA224(t *testing.T) {
-	var err error
-
-	sp := UsmSecurityParameters{
-		localAESSalt:             0,
-		localDESSalt:             0,
-		AuthoritativeEngineBoots: 43,
-		AuthoritativeEngineID:    authorativeEngineID(t),
-		AuthoritativeEngineTime:  2113189,
-		UserName:                 "usr-sha224-none",
-		AuthenticationParameters: "",
-		PrivacyParameters:        nil,
-		AuthenticationProtocol:   SHA224,
-		PrivacyProtocol:          0,
-		AuthenticationPassphrase: "authkey1",
-		PrivacyPassphrase:        "",
-		SecretKey:                nil,
-		Logger:                   NewLogger(log.New(ioutil.Discard, "", 0)),
-		PrivacyKey:               nil,
-	}
-
-	sp.SecretKey, err = genlocalkey(sp.AuthenticationProtocol,
-		sp.AuthenticationPassphrase,
-		sp.AuthoritativeEngineID)
-
-	require.NoError(t, err, "Generation of key failed")
-	require.Equal(t, correctKeySHA224(t), sp.SecretKey, "Wrong key generated")
-
-	srcPacket := packetSHA224NoAuthentication(t)
-	err = sp.authenticate(srcPacket)
-	require.NoError(t, err, "Authentication of packet failed")
-
-	require.Equal(t, packetSHA224Authenticated(t), srcPacket, "Wrong message authentication parameters.")
-}
-
-func TestIsAuthenticaSHA224(t *testing.T) {
+func TestIsAuthenticWrongUsername(t *testing.T) {
 	var err error
 
 	sp := UsmSecurityParameters{
@@ -102,7 +71,82 @@ func TestIsAuthenticaSHA224(t *testing.T) {
 		PrivacyPassphrase:        "",
 		SecretKey:                nil,
 		PrivacyKey:               nil,
-		Logger:                   NewLogger(log.New(ioutil.Discard, "", 0)),
+		Logger:                   NewLogger(log.New(io.Discard, "", 0)),
+	}
+
+	sp.SecretKey, err = genlocalkey(sp.AuthenticationProtocol,
+		sp.AuthenticationPassphrase,
+		sp.AuthoritativeEngineID)
+
+	require.NoError(t, err, "Generation of key failed")
+	require.Equal(t, correctKeySHA224(t), sp.SecretKey, "Wrong key generated")
+
+	srcPacket := packetSHA224NoAuthentication(t)
+
+	snmpPacket := SnmpPacket{
+		SecurityParameters: sp.Copy(),
+	}
+	snmpPacket.SecurityParameters.(*UsmSecurityParameters).UserName = "foo"
+
+	authentic, err := sp.isAuthentic(srcPacket, &snmpPacket)
+	require.NoError(t, err, "Authentication check of key failed")
+	require.False(t, authentic, "Packet was considered to be authentic")
+}
+
+func TestAuthenticationSHA224(t *testing.T) {
+	var err error
+
+	sp := UsmSecurityParameters{
+		localAESSalt:             0,
+		localDESSalt:             0,
+		AuthoritativeEngineBoots: 43,
+		AuthoritativeEngineID:    authorativeEngineID(t),
+		AuthoritativeEngineTime:  2113189,
+		UserName:                 "usr-sha224-none",
+		AuthenticationParameters: "",
+		PrivacyParameters:        nil,
+		AuthenticationProtocol:   SHA224,
+		PrivacyProtocol:          0,
+		AuthenticationPassphrase: "authkey1",
+		PrivacyPassphrase:        "",
+		SecretKey:                nil,
+		Logger:                   NewLogger(log.New(io.Discard, "", 0)),
+		PrivacyKey:               nil,
+	}
+
+	sp.SecretKey, err = genlocalkey(sp.AuthenticationProtocol,
+		sp.AuthenticationPassphrase,
+		sp.AuthoritativeEngineID)
+
+	require.NoError(t, err, "Generation of key failed")
+	require.Equal(t, correctKeySHA224(t), sp.SecretKey, "Wrong key generated")
+
+	srcPacket := packetSHA224NoAuthentication(t)
+	err = sp.authenticate(srcPacket)
+	require.NoError(t, err, "Authentication of packet failed")
+
+	require.Equal(t, packetSHA224Authenticated(t), srcPacket, "Wrong message authentication parameters.")
+}
+
+func TestIsAuthenticSHA224(t *testing.T) {
+	var err error
+
+	sp := UsmSecurityParameters{
+		localAESSalt:             0,
+		localDESSalt:             0,
+		AuthoritativeEngineBoots: 43,
+		AuthoritativeEngineID:    authorativeEngineID(t),
+		AuthoritativeEngineTime:  2113189,
+		UserName:                 "usr-sha224-none",
+		AuthenticationParameters: packetSHA224AuthenticationParams(t),
+		PrivacyParameters:        nil,
+		AuthenticationProtocol:   SHA224,
+		PrivacyProtocol:          0,
+		AuthenticationPassphrase: "authkey1",
+		PrivacyPassphrase:        "",
+		SecretKey:                nil,
+		PrivacyKey:               nil,
+		Logger:                   NewLogger(log.New(io.Discard, "", 0)),
 	}
 
 	sp.SecretKey, err = genlocalkey(sp.AuthenticationProtocol,
@@ -169,7 +213,7 @@ func TestAuthenticationSHA512(t *testing.T) {
 		PrivacyPassphrase:        "",
 		SecretKey:                nil,
 		PrivacyKey:               nil,
-		Logger:                   NewLogger(log.New(ioutil.Discard, "", 0)),
+		Logger:                   NewLogger(log.New(io.Discard, "", 0)),
 	}
 
 	sp.SecretKey, err = genlocalkey(sp.AuthenticationProtocol,
@@ -186,7 +230,7 @@ func TestAuthenticationSHA512(t *testing.T) {
 	require.Equal(t, packetSHA512Authenticated(t), srcPacket, "Wrong message authentication parameters.")
 }
 
-func TestIsAuthenticaSHA512(t *testing.T) {
+func TestIsAuthenticSHA512(t *testing.T) {
 	var err error
 
 	sp := UsmSecurityParameters{
@@ -203,7 +247,7 @@ func TestIsAuthenticaSHA512(t *testing.T) {
 		AuthenticationPassphrase: "authkey1",
 		PrivacyPassphrase:        "",
 		SecretKey:                nil,
-		Logger:                   NewLogger(log.New(ioutil.Discard, "", 0)),
+		Logger:                   NewLogger(log.New(io.Discard, "", 0)),
 		PrivacyKey:               nil,
 	}
 
@@ -223,4 +267,25 @@ func TestIsAuthenticaSHA512(t *testing.T) {
 	authentic, err := sp.isAuthentic(srcPacket, &snmpPacket)
 	require.NoError(t, err, "Authentication check of key failed")
 	require.True(t, authentic, "Packet was not considered to be authentic")
+}
+
+func BenchmarkSingleHash(b *testing.B) {
+	SetPwdCache()
+
+	engineID, _ := hex.DecodeString("80004fb805636c6f75644dab22cc")
+
+	for i := MD5; i < SHA512; i++ {
+		b.Run(b.Name()+i.String(), func(b *testing.B) {
+			for n := 0; n < b.N; n++ {
+				_, err := genlocalkey(i, "authkey1", string(engineID))
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+
+	passwordKeyHashMutex.RLock()
+	b.Logf("cache size %d", len(passwordKeyHashCache))
+	passwordKeyHashMutex.RUnlock()
 }

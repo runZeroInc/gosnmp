@@ -16,7 +16,9 @@ import (
 	"math/big"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -26,9 +28,6 @@ const (
 	// strangely. 60 seems to be a common value that works, but you will want
 	// to change this in the GoSNMP struct
 	MaxOids = 60
-
-	// Base OID for MIB-2 defined SNMP variables
-	baseOid = ".1.3.6.1.2.1"
 
 	// Max oid sub-identifier value
 	// https://tools.ietf.org/html/rfc2578#section-7.1.3
@@ -110,8 +109,7 @@ type GoSNMP struct {
 	// See comments in https://github.com/gosnmp/gosnmp/issues/100
 	MaxRepetitions uint32
 
-	// NonRepeaters sets the GETBULK max-repeaters used by BulkWalk*.
-	// (default: 0 as per RFC 1905)
+	// Deprecated: This parameter is not used and ignored
 	NonRepeaters int
 
 	// UseUnconnectedUDPSocket if set, changes net.Conn to be unconnected UDP socket.
@@ -119,6 +117,14 @@ type GoSNMP struct {
 	// from the address it received the requests on. To work around that,
 	// we open unconnected UDP socket and use sendto/recvfrom.
 	UseUnconnectedUDPSocket bool
+
+	// If Control is not nil, it is called after creating the network
+	// connection but before actually dialing.
+	//
+	// Can be used when UseUnconnectedUDPSocket is set to false or when using TCP
+	// in scenario where specific options on the underlying socket are nedded.
+	// Refer to https://pkg.go.dev/net#Dialer
+	Control func(network, address string, c syscall.RawConn) error
 
 	// LocalAddr is the local address in the format "address:port" to use when connecting an Target address.
 	// If the port parameter is empty or "0", as in
@@ -130,7 +136,7 @@ type GoSNMP struct {
 	// - 'c: do not check returned OIDs are increasing' - use AppOpts = map[string]interface{"c":true} with
 	//   Walk() or BulkWalk(). The library user needs to implement their own policy for terminating walks.
 	// - 'p,i,I,t,E' -> pull requests welcome
-	AppOpts map[string]interface{}
+	AppOpts map[string]any
 
 	// Internal - used to sync requests to responses.
 	requestID uint32
@@ -147,6 +153,10 @@ type GoSNMP struct {
 	// SecurityParameters is an SNMPV3 Security Model parameters struct.
 	SecurityParameters SnmpV3SecurityParameters
 
+	// TrapSecurityParametersTable is a mapping of identifiers to corresponding SNMP V3 Security Model parameters
+	// right now only supported for receiving traps, variable name to make that clear
+	TrapSecurityParametersTable *SnmpV3SecurityParametersTable
+
 	// ContextEngineID is SNMPV3 ContextEngineID in ScopedPDU.
 	ContextEngineID string
 
@@ -158,9 +168,13 @@ type GoSNMP struct {
 
 	// Internal - we use to send packets if using unconnected socket.
 	uaddr *net.UDPAddr
+
+	// Internal - mutual exclusion allows us to idempotently perform operations
+	mu sync.Mutex
 }
 
 // Default connection settings
+//
 //nolint:gochecknoglobals
 var Default = &GoSNMP{
 	Port:               161,
@@ -177,7 +191,7 @@ var Default = &GoSNMP{
 type SnmpPDU struct {
 	// The value to be set by the SNMP set, or the value when
 	// sending a trap
-	Value interface{}
+	Value any
 
 	// Name is an oid in string format eg ".1.3.6.1.4.9.27"
 	Name string
@@ -186,8 +200,9 @@ type SnmpPDU struct {
 	Type Asn1BER
 }
 
-// AsnExtensionID mask to identify types > 30 in subsequent byte
+const AsnContext = 0x80
 const AsnExtensionID = 0x1F
+const AsnExtensionTag = (AsnContext | AsnExtensionID) // 0x9F
 
 //go:generate stringer -type Asn1BER
 
@@ -272,11 +287,29 @@ func (x *GoSNMP) ConnectIPv6() error {
 	return x.connect("6")
 }
 
+// Close closes the underlaying connection.
+//
+// This method is safe to call multiple times and from concurrent goroutines.
+// Only the first call will close the connection; subsequent calls are no-ops.
+func (x *GoSNMP) Close() error {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+
+	if x.Conn == nil {
+		return nil
+	}
+
+	err := x.Conn.Close()
+	x.Conn = nil
+	return err
+}
+
 // connect to address addr on the given network
 //
 // https://golang.org/pkg/net/#Dial gives acceptable network values as:
-//   "tcp", "tcp4" (IPv4-only), "tcp6" (IPv6-only), "udp", "udp4" (IPv4-only),"udp6" (IPv6-only), "ip",
-//   "ip4" (IPv4-only), "ip6" (IPv6-only), "unix", "unixgram" and "unixpacket"
+//
+//	"tcp", "tcp4" (IPv4-only), "tcp6" (IPv6-only), "udp", "udp4" (IPv4-only),"udp6" (IPv6-only), "ip",
+//	"ip4" (IPv4-only), "ip6" (IPv6-only), "unix", "unixgram" and "unixpacket"
 func (x *GoSNMP) connect(networkSuffix string) error {
 	err := x.validateParameters()
 	if err != nil {
@@ -293,7 +326,7 @@ func (x *GoSNMP) connect(networkSuffix string) error {
 		if err != nil {
 			return fmt.Errorf("error occurred while generating random: %w", err)
 		}
-		x.random = uint32(n.Uint64())
+		x.random = uint32(n.Uint64()) //nolint:gosec
 	}
 	// http://tools.ietf.org/html/rfc3412#section-6 - msgID only uses the first 31 bits
 	// msgID INTEGER (0..2147483647)
@@ -338,7 +371,7 @@ func (x *GoSNMP) netConnect() error {
 			x.Transport = "tcp4"
 		}
 	}
-	dialer := net.Dialer{Timeout: x.Timeout, LocalAddr: localAddr}
+	dialer := net.Dialer{Timeout: x.Timeout, LocalAddr: localAddr, Control: x.Control}
 	x.Conn, err = dialer.DialContext(x.Context, x.Transport, addr)
 	return err
 }
@@ -355,6 +388,8 @@ func (x *GoSNMP) validateParameters() error {
 	}
 
 	if x.Version == Version3 {
+		// TODO: setting the Reportable flag violates rfc3412#6.4 if PDU is of type SNMPv2Trap.
+		// See if we can do this smarter and remove bitclear fix from trap.go:57
 		x.MsgFlags |= Reportable // tell the snmp server that a report PDU MUST be sent
 
 		err := x.validateParametersV3()
@@ -371,6 +406,10 @@ func (x *GoSNMP) validateParameters() error {
 		x.Context = context.Background()
 	}
 	return nil
+}
+
+func (x *GoSNMP) MkSnmpPacket(pdutype PDUType, pdus []SnmpPDU, nonRepeaters uint8, maxRepetitions uint32) *SnmpPacket {
+	return x.mkSnmpPacket(pdutype, pdus, nonRepeaters, maxRepetitions)
 }
 
 func (x *GoSNMP) mkSnmpPacket(pdutype PDUType, pdus []SnmpPDU, nonRepeaters uint8, maxRepetitions uint32) *SnmpPacket {
@@ -417,10 +456,10 @@ func (x *GoSNMP) Set(pdus []SnmpPDU) (result *SnmpPacket, err error) {
 	var packetOut *SnmpPacket
 	switch pdus[0].Type {
 	// TODO test Gauge32
-	case Integer, OctetString, Gauge32, IPAddress:
+	case Integer, OctetString, Gauge32, IPAddress, ObjectIdentifier, Counter32, Counter64, Null, TimeTicks, Uinteger32, OpaqueFloat, OpaqueDouble:
 		packetOut = x.mkSnmpPacket(SetRequest, pdus, 0, 0)
 	default:
-		return nil, fmt.Errorf("ERR:gosnmp currently only supports SNMP SETs for Integers, IPAddress and OctetStrings")
+		return nil, fmt.Errorf("ERR:gosnmp currently only supports SNMP SETs for Integer, OctetString, Gauge32, IPAddress, ObjectIdentifier, Counter32, Counter64, Null, TimeTicks, Uinteger32, OpaqueFloat, and OpaqueDouble. Not %s", pdus[0].Type)
 	}
 	return x.send(packetOut, true)
 }
@@ -611,8 +650,8 @@ func (x *GoSNMP) WalkAll(rootOid string) (results []SnmpPDU, err error) {
 // the following values:
 //
 // 0  1  2  3  4  5  6  7
-//       T        T     T
 //
+//	T        T     T
 func Partition(currentPosition, partitionSize, sliceLength int) bool {
 	if currentPosition < 0 || currentPosition >= sliceLength {
 		return false
@@ -635,7 +674,7 @@ func Partition(currentPosition, partitionSize, sliceLength int) bool {
 // This is a convenience function to make working with SnmpPDU's easier - it
 // reduces the need for type assertions. A big.Int is convenient, as SNMP can
 // return int32, uint32, and uint64.
-func ToBigInt(value interface{}) *big.Int {
+func ToBigInt(value any) *big.Int {
 	var val int64
 
 	switch value := value.(type) { // shadow
@@ -650,7 +689,7 @@ func ToBigInt(value interface{}) *big.Int {
 	case int64:
 		val = value
 	case uint:
-		val = int64(value)
+		val = int64(value) //nolint:gosec
 	case uint8:
 		val = int64(value)
 	case uint16:

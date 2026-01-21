@@ -1,3 +1,7 @@
+// Copyright 2020 The GoSNMP Authors. All rights reserved.  Use of this
+// source code is governed by a BSD-style license that can be found in the
+// LICENSE file.
+
 package main
 
 import (
@@ -46,7 +50,7 @@ func main() {
 			log.Fatal(err)
 		}
 		defer gosnmp.Default.Conn.Close()
-		//RebuildCron()
+		// RebuildCron()
 		log.Printf("Running (%d)\n", cou)
 
 		trap := gosnmp.SnmpTrap{
@@ -64,14 +68,13 @@ func main() {
 
 		cou--
 	}
-	//time.Sleep(time.Duration(10) * time.Second)
+	// time.Sleep(time.Duration(10) * time.Second)
 
 	log.Println("Stop...")
 }
 
 // Start SNMP server
 func Start(address string) {
-
 	log.Printf("Starting SNMP TRAP Server on: %s\n", address)
 	tl := gosnmp.NewTrapListener()
 	tl.OnNewTrap = myTrapHandlerTCP
@@ -107,6 +110,5 @@ func myTrapHandlerTCP(packet *gosnmp.SnmpPacket, addr *net.UDPAddr) {
 			val = fmt.Sprintf("%d", (*a).Int64())
 		}
 		log.Printf("- oid[%d]: %s (%s) = %v \n", i, variable.Name, variable.Type, val)
-
 	}
 }

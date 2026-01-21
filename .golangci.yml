@@ -1,48 +1,54 @@
----
-run:
-  timeout: 5m
-
+version: "2"
 linters:
   enable:
-  - bodyclose
-  - dogsled
-  - dupl
-  - exportloopref # Replaces scopelint
-  - gochecknoglobals
-  - goconst
-  - gocritic
-  - goimports
-  - goprintffuncname
-  - gosec
-  - misspell
-  - nakedret
-  - nolintlint
-  - revive # Replaces golint
-  - unconvert
-  - unparam
-  - whitespace
-  # TODO the following linters
-  # - gocognit
-  # - gocyclo
-  # - goerr113
-  # - gomnd
-  # - lll
-  # - nestif
-  # - prealloc
-  disable:
-  # Disable soon to deprecated[1] linters that lead to false
-  # positives when build tags disable certain files[2]
-  # 1: https://github.com/golangci/golangci-lint/issues/1841
-  # 2: https://github.com/prometheus/node_exporter/issues/1545
-  - deadcode
-  - unused
-  - structcheck
-  - varcheck
-
-linters-settings:
-  gofmt:
-    simplify: true
-  gocyclo:
-    min-complexity: 20
-  govet:
-    check-shadowing: true
+    - bodyclose
+    - copyloopvar
+    - dogsled
+    - dupl
+    - gochecknoglobals
+    - goconst
+    - gocritic
+    - goprintffuncname
+    - gosec
+    - misspell
+    - modernize
+    - nakedret
+    - nolintlint
+    - revive
+    - unconvert
+    - unparam
+    - whitespace
+  settings:
+    gocritic:
+      disabled-checks:
+        - exitAfterDefer
+    gocyclo:
+      min-complexity: 20
+    gosec:
+      excludes:
+        - G501 # Allowed for handling old SNMP security methods.
+        - G502 # Allowed for handling old SNMP security methods.
+        - G505 # Allowed for handling old SNMP security methods.
+    govet:
+      enable:
+        - shadow
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - gochecknoglobals
+          - nolintlint
+        path: _test.go
+formatters:
+  enable:
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+  exclusions:
+    generated: lax

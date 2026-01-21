@@ -13,13 +13,14 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/des" //nolint:gosec
+	"crypto/des"
 	"crypto/hmac"
-	"crypto/md5" //nolint:gosec
+	"crypto/md5"
 	crand "crypto/rand"
-	"crypto/sha1"     //nolint:gosec
+	"crypto/sha1"
 	_ "crypto/sha256" // Register hash function #4 (SHA224), #5 (SHA256)
 	_ "crypto/sha512" // Register hash function #6 (SHA384), #7 (SHA512)
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -66,38 +67,38 @@ func (authProtocol SnmpV3AuthProtocol) HashType() crypto.Hash {
 
 //nolint:gochecknoglobals
 var macVarbinds = [][]byte{
-	{},
-	{byte(OctetString), 0},
-	{byte(OctetString), 12,
+	{},                     // dummy
+	{byte(OctetString), 0}, // NoAuth
+	{byte(OctetString), 12, // MD5
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0},
-	{byte(OctetString), 12,
+	{byte(OctetString), 12, // SHA
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0},
-	{byte(OctetString), 16,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0},
-	{byte(OctetString), 24,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
+	{byte(OctetString), 16, // SHA224
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0},
-	{byte(OctetString), 32,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
+	{byte(OctetString), 24, // SHA256
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0},
-	{byte(OctetString), 48,
+	{byte(OctetString), 32, // SHA384
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0},
+	{byte(OctetString), 48, // SHA512
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
@@ -154,6 +155,18 @@ type UsmSecurityParameters struct {
 	Logger Logger
 }
 
+func (sp *UsmSecurityParameters) getIdentifier() string {
+	return sp.UserName
+}
+
+func (sp *UsmSecurityParameters) getLogger() Logger {
+	return sp.Logger
+}
+
+func (sp *UsmSecurityParameters) setLogger(log Logger) {
+	sp.Logger = log
+}
+
 // Description logs authentication paramater information to the provided GoSNMP Logger
 func (sp *UsmSecurityParameters) Description() string {
 	var sb strings.Builder
@@ -206,11 +219,25 @@ func (sp *UsmSecurityParameters) Description() string {
 	return sb.String()
 }
 
+// SafeString returns a logging safe (no secrets) string of the UsmSecurityParameters
+func (sp *UsmSecurityParameters) SafeString() string {
+	return fmt.Sprintf("AuthoritativeEngineID:%s, AuthoritativeEngineBoots:%d, AuthoritativeEngineTimes:%d, UserName:%s, AuthenticationParameters:%s, PrivacyParameters:%v, AuthenticationProtocol:%s, PrivacyProtocol:%s",
+		sp.AuthoritativeEngineID,
+		sp.AuthoritativeEngineBoots,
+		sp.AuthoritativeEngineTime,
+		sp.UserName,
+		sp.AuthenticationParameters,
+		sp.PrivacyParameters,
+		sp.AuthenticationProtocol,
+		sp.PrivacyProtocol,
+	)
+}
+
 // Log logs security paramater information to the provided GoSNMP Logger
 func (sp *UsmSecurityParameters) Log() {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	sp.Logger.Printf("SECURITY PARAMETERS:%+v", sp)
+	sp.Logger.Printf("SECURITY PARAMETERS:%s", sp.SafeString())
 }
 
 // Copy method for UsmSecurityParameters used to copy a SnmpV3SecurityParameters without knowing it's implementation
@@ -238,7 +265,9 @@ func (sp *UsmSecurityParameters) Copy() SnmpV3SecurityParameters {
 func (sp *UsmSecurityParameters) getDefaultContextEngineID() string {
 	return sp.AuthoritativeEngineID
 }
-func (sp *UsmSecurityParameters) initSecurityKeys() error {
+
+// InitSecurityKeys initializes the Priv and Auth keys if needed
+func (sp *UsmSecurityParameters) InitSecurityKeys() error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
@@ -379,7 +408,22 @@ func castUsmSecParams(secParams SnmpV3SecurityParameters) (*UsmSecurityParameter
 var (
 	passwordKeyHashCache = make(map[string][]byte) //nolint:gochecknoglobals
 	passwordKeyHashMutex sync.RWMutex              //nolint:gochecknoglobals
+	passwordCacheDisable atomic.Bool               //nolint:gochecknoglobals
 )
+
+// PasswordCaching is enabled by default for performance reason. If the cache was disabled then
+// re-enabled, the cache is reset.
+func PasswordCaching(enable bool) {
+	oldCacheEnable := !passwordCacheDisable.Load()
+	passwordKeyHashMutex.Lock()
+	if !enable { // if off
+		passwordKeyHashCache = nil
+	} else if !oldCacheEnable && enable { // if off then on
+		passwordKeyHashCache = make(map[string][]byte)
+	}
+	passwordCacheDisable.Store(!enable)
+	passwordKeyHashMutex.Unlock()
+}
 
 func hashPassword(hash hash.Hash, password string) ([]byte, error) {
 	if len(password) == 0 {
@@ -388,7 +432,7 @@ func hashPassword(hash hash.Hash, password string) ([]byte, error) {
 	var pi int // password index
 	for i := 0; i < 1048576; i += 64 {
 		var chunk []byte
-		for e := 0; e < 64; e++ {
+		for range 64 {
 			chunk = append(chunk, password[pi%len(password)])
 			pi++
 		}
@@ -402,12 +446,15 @@ func hashPassword(hash hash.Hash, password string) ([]byte, error) {
 
 // Common passwordToKey algorithm, "caches" the result to avoid extra computation each reuse
 func cachedPasswordToKey(hash hash.Hash, cacheKey string, password string) ([]byte, error) {
-	passwordKeyHashMutex.RLock()
-	value := passwordKeyHashCache[cacheKey]
-	passwordKeyHashMutex.RUnlock()
+	cacheDisable := passwordCacheDisable.Load()
+	if !cacheDisable {
+		passwordKeyHashMutex.RLock()
+		value := passwordKeyHashCache[cacheKey]
+		passwordKeyHashMutex.RUnlock()
 
-	if value != nil {
-		return value, nil
+		if value != nil {
+			return value, nil
+		}
 	}
 
 	hashed, err := hashPassword(hash, password)
@@ -415,9 +462,11 @@ func cachedPasswordToKey(hash hash.Hash, cacheKey string, password string) ([]by
 		return nil, err
 	}
 
-	passwordKeyHashMutex.Lock()
-	passwordKeyHashCache[cacheKey] = hashed
-	passwordKeyHashMutex.Unlock()
+	if !cacheDisable {
+		passwordKeyHashMutex.Lock()
+		passwordKeyHashCache[cacheKey] = hashed
+		passwordKeyHashMutex.Unlock()
+	}
 
 	return hashed, nil
 }
@@ -449,6 +498,9 @@ func hMAC(hash crypto.Hash, cacheKey string, password string, engineID string) (
 }
 
 func cacheKey(authProtocol SnmpV3AuthProtocol, passphrase string) string {
+	if passwordCacheDisable.Load() {
+		return ""
+	}
 	var cacheKey = make([]byte, 1+len(passphrase))
 	cacheKey = append(cacheKey, 'h'+byte(authProtocol))
 	cacheKey = append(cacheKey, []byte(passphrase)...)
@@ -479,12 +531,12 @@ func extendKeyReeder(authProtocol SnmpV3AuthProtocol, password string, engineID 
 // https://tools.ietf.org/html/draft-blumenthal-aes-usm-04#page-7
 // Not many vendors use this algorithm.
 // Previously implemented in the net-snmp and pysnmp libraries.
-// Not tested
+// TODO: Not tested
 func extendKeyBlumenthal(authProtocol SnmpV3AuthProtocol, password string, engineID string) ([]byte, error) {
 	var key []byte
 	var err error
 
-	key, err = hMAC(authProtocol.HashType(), cacheKey(authProtocol, ""), password, engineID)
+	key, err = hMAC(authProtocol.HashType(), cacheKey(authProtocol, password), password, engineID)
 
 	if err != nil {
 		return nil, err
@@ -548,10 +600,10 @@ func genlocalkey(authProtocol SnmpV3AuthProtocol, passphrase string, engineID st
 
 // http://tools.ietf.org/html/rfc2574#section-8.1.1.1
 // localDESSalt needs to be incremented on every packet.
-func (sp *UsmSecurityParameters) usmAllocateNewSalt() interface{} {
+func (sp *UsmSecurityParameters) usmAllocateNewSalt() any {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	var newSalt interface{}
+	var newSalt any
 
 	switch sp.PrivacyProtocol {
 	case AES, AES192, AES256, AES192C, AES256C:
@@ -562,7 +614,7 @@ func (sp *UsmSecurityParameters) usmAllocateNewSalt() interface{} {
 	return newSalt
 }
 
-func (sp *UsmSecurityParameters) usmSetSalt(newSalt interface{}) error {
+func (sp *UsmSecurityParameters) usmSetSalt(newSalt any) error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	switch sp.PrivacyProtocol {
@@ -587,7 +639,8 @@ func (sp *UsmSecurityParameters) usmSetSalt(newSalt interface{}) error {
 	return nil
 }
 
-func (sp *UsmSecurityParameters) initPacket(packet *SnmpPacket) error {
+// InitPacket ensures the enc salt is incremented for packets marked for AuthPriv
+func (sp *UsmSecurityParameters) InitPacket(packet *SnmpPacket) error {
 	// http://tools.ietf.org/html/rfc2574#section-8.1.1.1
 	// localDESSalt needs to be incremented on every packet.
 	newSalt := sp.usmAllocateNewSalt()
@@ -644,8 +697,13 @@ func calcPacketDigest(packetBytes []byte, secParams *UsmSecurityParameters) ([]b
 			packetBytes,
 			secParams.SecretKey)
 	}
+	if err != nil {
+		return nil, err
+	}
 
-	return digest, err
+	digest = digest[:len(macVarbinds[secParams.AuthenticationProtocol])-2]
+
+	return digest, nil
 }
 
 // digestRFC7860 calculate digest for incoming messages using HMAC-SHA2 protcols
@@ -679,9 +737,9 @@ func digestRFC3414(h SnmpV3AuthProtocol, packet []byte, authKey []byte) ([]byte,
 		h2 = sha1.New() //nolint:gosec
 	}
 
-	for i := 0; i < 64; i++ {
-		k1[i] = extkey[i] ^ 0x36
-		k2[i] = extkey[i] ^ 0x5c
+	for i := range 64 {
+		k1[i] = extkey[i] ^ 0x36 //nolint:gosec
+		k2[i] = extkey[i] ^ 0x5c //nolint:gosec
 	}
 
 	_, err = h1.Write(k1[:])
@@ -736,17 +794,20 @@ func (sp *UsmSecurityParameters) isAuthentic(packetBytes []byte, packet *SnmpPac
 	if packetSecParams, err = castUsmSecParams(packet.SecurityParameters); err != nil {
 		return false, err
 	}
+
+	// Verify the username
+	if packetSecParams.UserName != sp.UserName {
+		return false, nil
+	}
+
 	// TODO: investigate call chain to determine if this is really the best spot for this
 	if msgDigest, err = calcPacketDigest(packetBytes, packetSecParams); err != nil {
 		return false, err
 	}
 
-	for k, v := range []byte(packetSecParams.AuthenticationParameters) {
-		if msgDigest[k] != v {
-			return false, nil
-		}
-	}
-	return true, nil
+	// Check the message signature against the computed digest
+	signature := []byte(packetSecParams.AuthenticationParameters)
+	return subtle.ConstantTimeCompare(msgDigest, signature) == 1, nil
 }
 
 func (sp *UsmSecurityParameters) encryptPacket(scopedPdu []byte) ([]byte, error) {
@@ -763,6 +824,7 @@ func (sp *UsmSecurityParameters) encryptPacket(scopedPdu []byte) ([]byte, error)
 		if err != nil {
 			return nil, err
 		}
+		//nolint:staticcheck // RFC3826 Section 3.1.1.1 specifies CFB-128 mode for AES
 		stream := cipher.NewCFBEncrypter(block, iv[:])
 		ciphertext := make([]byte, len(scopedPdu))
 		stream.XORKeyStream(ciphertext, scopedPdu)
@@ -772,11 +834,11 @@ func (sp *UsmSecurityParameters) encryptPacket(scopedPdu []byte) ([]byte, error)
 		}
 		b = append([]byte{byte(OctetString)}, pduLen...)
 		scopedPdu = append(b, ciphertext...) //nolint:gocritic
-	default:
+	case DES:
 		preiv := sp.PrivacyKey[8:]
 		var iv [8]byte
-		for i := 0; i < len(iv); i++ {
-			iv[i] = preiv[i] ^ sp.PrivacyParameters[i]
+		for i := range len(iv) {
+			iv[i] = preiv[i] ^ sp.PrivacyParameters[i] //nolint:gosec
 		}
 		block, err := des.NewCipher(sp.PrivacyKey[:8]) //nolint:gosec
 		if err != nil {
@@ -821,19 +883,20 @@ func (sp *UsmSecurityParameters) decryptPacket(packet []byte, cursor int) ([]byt
 		if err != nil {
 			return nil, err
 		}
+		//nolint:staticcheck // RFC3826 Section 3.1.1.1 specifies CFB-128 mode for AES
 		stream := cipher.NewCFBDecrypter(block, iv[:])
 		plaintext := make([]byte, len(packet[cursorTmp:]))
 		stream.XORKeyStream(plaintext, packet[cursorTmp:])
 		copy(packet[cursor:], plaintext)
 		packet = packet[:cursor+len(plaintext)]
-	default:
+	case DES:
 		if len(packet[cursorTmp:])%des.BlockSize != 0 {
 			return nil, errors.New("error decrypting ScopedPDU: not multiple of des block size")
 		}
 		preiv := sp.PrivacyKey[8:]
 		var iv [8]byte
-		for i := 0; i < len(iv); i++ {
-			iv[i] = preiv[i] ^ sp.PrivacyParameters[i]
+		for i := range len(iv) {
+			iv[i] = preiv[i] ^ sp.PrivacyParameters[i] //nolint:gosec
 		}
 		block, err := des.NewCipher(sp.PrivacyKey[:8]) //nolint:gosec
 		if err != nil {
@@ -861,12 +924,18 @@ func (sp *UsmSecurityParameters) marshal(flags SnmpV3MsgFlags) ([]byte, error) {
 	buf.WriteString(sp.AuthoritativeEngineID)
 
 	// msgAuthoritativeEngineBoots
-	msgAuthoritativeEngineBoots := marshalUvarInt(sp.AuthoritativeEngineBoots)
+	msgAuthoritativeEngineBoots, err := marshalUint32(sp.AuthoritativeEngineBoots)
+	if err != nil {
+		return nil, err
+	}
 	buf.Write([]byte{byte(Integer), byte(len(msgAuthoritativeEngineBoots))})
 	buf.Write(msgAuthoritativeEngineBoots)
 
 	// msgAuthoritativeEngineTime
-	msgAuthoritativeEngineTime := marshalUvarInt(sp.AuthoritativeEngineTime)
+	msgAuthoritativeEngineTime, err := marshalUint32(sp.AuthoritativeEngineTime)
+	if err != nil {
+		return nil, err
+	}
 	buf.Write([]byte{byte(Integer), byte(len(msgAuthoritativeEngineTime))})
 	buf.Write(msgAuthoritativeEngineTime)
 
@@ -907,6 +976,10 @@ func (sp *UsmSecurityParameters) marshal(flags SnmpV3MsgFlags) ([]byte, error) {
 func (sp *UsmSecurityParameters) unmarshal(flags SnmpV3MsgFlags, packet []byte, cursor int) (int, error) {
 	var err error
 
+	if cursor >= len(packet) {
+		return 0, errors.New("error parsing SNMPV3 User Security Model parameters: end of packet")
+	}
+
 	if PDUType(packet[cursor]) != Sequence {
 		return 0, errors.New("error parsing SNMPV3 User Security Model parameters")
 	}
@@ -944,7 +1017,7 @@ func (sp *UsmSecurityParameters) unmarshal(flags SnmpV3MsgFlags, packet []byte, 
 	}
 	cursor += count
 	if AuthoritativeEngineBoots, ok := rawMsgAuthoritativeEngineBoots.(int); ok {
-		sp.AuthoritativeEngineBoots = uint32(AuthoritativeEngineBoots)
+		sp.AuthoritativeEngineBoots = uint32(AuthoritativeEngineBoots) //nolint:gosec
 		sp.Logger.Printf("Parsed authoritativeEngineBoots %d", AuthoritativeEngineBoots)
 	}
 
@@ -954,7 +1027,7 @@ func (sp *UsmSecurityParameters) unmarshal(flags SnmpV3MsgFlags, packet []byte, 
 	}
 	cursor += count
 	if AuthoritativeEngineTime, ok := rawMsgAuthoritativeEngineTime.(int); ok {
-		sp.AuthoritativeEngineTime = uint32(AuthoritativeEngineTime)
+		sp.AuthoritativeEngineTime = uint32(AuthoritativeEngineTime) //nolint:gosec
 		sp.Logger.Printf("Parsed authoritativeEngineTime %d", AuthoritativeEngineTime)
 	}
 
