@@ -69,39 +69,36 @@ func (authProtocol SnmpV3AuthProtocol) HashType() crypto.Hash {
 var macVarbinds = [][]byte{
 	{},                     // dummy
 	{byte(OctetString), 0}, // NoAuth
-	{byte(OctetString), 12, // MD5
-		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0},
-	{byte(OctetString), 12, // SHA
-		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0},
-	{byte(OctetString), 16, // SHA224
+	{
+		byte(OctetString), 12, // MD5
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
-		0, 0, 0, 0},
-	{byte(OctetString), 24, // SHA256
+	},
+	{
+		byte(OctetString), 12, // SHA
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0},
-	{byte(OctetString), 32, // SHA384
+	},
+	{
+		byte(OctetString), 16, // SHA224
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
+	},
+	{
+		byte(OctetString), 24, // SHA256
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
-		0, 0, 0, 0},
-	{byte(OctetString), 48, // SHA512
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
+	},
+	{
+		byte(OctetString), 32, // SHA384
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
@@ -110,7 +107,23 @@ var macVarbinds = [][]byte{
 		0, 0, 0, 0,
 		0, 0, 0, 0,
 		0, 0, 0, 0,
-		0, 0, 0, 0}}
+	},
+	{
+		byte(OctetString), 48, // SHA512
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+	},
+}
 
 // SnmpV3PrivProtocol is the privacy protocol in use by an private SnmpV3 connection.
 type SnmpV3PrivProtocol uint8
@@ -244,7 +257,8 @@ func (sp *UsmSecurityParameters) Log() {
 func (sp *UsmSecurityParameters) Copy() SnmpV3SecurityParameters {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	return &UsmSecurityParameters{AuthoritativeEngineID: sp.AuthoritativeEngineID,
+	return &UsmSecurityParameters{
+		AuthoritativeEngineID:    sp.AuthoritativeEngineID,
 		AuthoritativeEngineBoots: sp.AuthoritativeEngineBoots,
 		AuthoritativeEngineTime:  sp.AuthoritativeEngineTime,
 		UserName:                 sp.UserName,
@@ -501,7 +515,7 @@ func cacheKey(authProtocol SnmpV3AuthProtocol, passphrase string) string {
 	if passwordCacheDisable.Load() {
 		return ""
 	}
-	var cacheKey = make([]byte, 1+len(passphrase))
+	cacheKey := make([]byte, 1+len(passphrase))
 	cacheKey = append(cacheKey, 'h'+byte(authProtocol))
 	cacheKey = append(cacheKey, []byte(passphrase)...)
 	return string(cacheKey)
@@ -517,7 +531,6 @@ func extendKeyReeder(authProtocol SnmpV3AuthProtocol, password string, engineID 
 	var err error
 
 	key, err = hMAC(authProtocol.HashType(), cacheKey(authProtocol, password), password, engineID)
-
 	if err != nil {
 		return nil, err
 	}
@@ -537,7 +550,6 @@ func extendKeyBlumenthal(authProtocol SnmpV3AuthProtocol, password string, engin
 	var err error
 
 	key, err = hMAC(authProtocol.HashType(), cacheKey(authProtocol, password), password, engineID)
-
 	if err != nil {
 		return nil, err
 	}
@@ -590,7 +602,6 @@ func genlocalkey(authProtocol SnmpV3AuthProtocol, passphrase string, engineID st
 	var err error
 
 	secretKey, err = hMAC(authProtocol.HashType(), cacheKey(authProtocol, passphrase), passphrase, engineID)
-
 	if err != nil {
 		return []byte{}, err
 	}
@@ -623,7 +634,7 @@ func (sp *UsmSecurityParameters) usmSetSalt(newSalt any) error {
 		if !ok {
 			return fmt.Errorf("salt provided to usmSetSalt is not the correct type for the AES privacy protocol")
 		}
-		var salt = make([]byte, 8)
+		salt := make([]byte, 8)
 		binary.BigEndian.PutUint64(salt, aesSalt)
 		sp.PrivacyParameters = salt
 	default:
@@ -631,7 +642,7 @@ func (sp *UsmSecurityParameters) usmSetSalt(newSalt any) error {
 		if !ok {
 			return fmt.Errorf("salt provided to usmSetSalt is not the correct type for the DES privacy protocol")
 		}
-		var salt = make([]byte, 8)
+		salt := make([]byte, 8)
 		binary.BigEndian.PutUint32(salt, sp.AuthoritativeEngineBoots)
 		binary.BigEndian.PutUint32(salt[4:], desSalt)
 		sp.PrivacyParameters = salt
