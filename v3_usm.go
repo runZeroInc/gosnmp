@@ -165,6 +165,9 @@ type UsmSecurityParameters struct {
 	SecretKey  []byte
 	PrivacyKey []byte
 
+	AcceptInauthentic bool
+	Inauthentic       bool
+
 	Logger Logger
 }
 
@@ -818,7 +821,15 @@ func (sp *UsmSecurityParameters) isAuthentic(packetBytes []byte, packet *SnmpPac
 
 	// Check the message signature against the computed digest
 	signature := []byte(packetSecParams.AuthenticationParameters)
-	return subtle.ConstantTimeCompare(msgDigest, signature) == 1, nil
+	valid := subtle.ConstantTimeCompare(msgDigest, signature) == 1
+	if valid {
+		return true, nil
+	}
+	if sp.AcceptInauthentic {
+		sp.Inauthentic = true
+		return true, nil
+	}
+	return false, nil
 }
 
 func (sp *UsmSecurityParameters) encryptPacket(scopedPdu []byte) ([]byte, error) {
