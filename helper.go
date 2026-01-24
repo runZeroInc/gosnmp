@@ -459,6 +459,19 @@ func marshalTLV(buf *bytes.Buffer, tag byte, value []byte) error {
 	return nil
 }
 
+// marshalTLV writes a BER TLV (type-length-value) to buf using proper length
+// encoding. Handles values of any size, including those exceeding 127 bytes.
+func marshalTLV(buf *bytes.Buffer, tag byte, value []byte) error {
+	length, err := marshalLength(len(value))
+	if err != nil {
+		return err
+	}
+	buf.WriteByte(tag)
+	buf.Write(length)
+	buf.Write(value)
+	return nil
+}
+
 func marshalObjectIdentifier(oid string) ([]byte, error) {
 	oidLength := len(oid)
 
