@@ -13,7 +13,7 @@ import (
 	"log"
 	"net"
 	"os"
-	"path"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -811,13 +811,37 @@ func TestUnmarshalErrors(t *testing.T) {
 }
 
 func FuzzUnmarshal(f *testing.F) {
+	fuzzCache := [][]byte{}
+
+	// Load inline test cases above
 	for _, test := range testsUnmarshalErr {
 		f.Add(test.in())
+		fuzzCache = append(fuzzCache, test.in())
 	}
-
 	for _, test := range testsUnmarshal {
 		f.Add(test.in())
+		fuzzCache = append(fuzzCache, test.in())
 	}
+
+	// Extract inputs from sample pcap files
+	filepath.WalkDir(filepath.Join("testdata", "pcaps"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		filename := path
+		dataSlices, err := pcapgz2bytes(filename)
+		if err != nil {
+			f.Fatalf("failed to read pcap %s: %v", filename, err)
+		}
+		for _, data := range dataSlices {
+			f.Add(data)
+			fuzzCache = append(fuzzCache, data)
+		}
+		return nil
+	})
 
 	vhandle := GoSNMP{}
 	vhandle.Logger = Default.Logger
@@ -2562,34 +2586,4 @@ func pcapgz2bytes(filename string) ([][]byte, error) {
 		res = append(res, payload)
 	}
 	return res, nil
-}
-
-func FuzzPcapsUnmarshal(f *testing.F) {
-	ents, err := fs.ReadDir(os.DirFS("."), "pcaps")
-	if err != nil {
-		f.Fatalf("failed to read pcap directory: %v", err)
-	}
-
-	for _, entry := range ents {
-		if entry.IsDir() {
-			continue
-		}
-		filename := path.Join("pcaps", entry.Name())
-		dataSlices, err := pcapgz2bytes(filename)
-		if err != nil {
-			f.Fatalf("failed to read pcap %s: %v", filename, err)
-		}
-		for _, data := range dataSlices {
-			f.Add(data)
-		}
-	}
-	vhandle := GoSNMP{}
-	vhandle.Logger = Default.Logger
-	f.Fuzz(func(t *testing.T, data []byte) {
-		stime := time.Now()
-		_, _ = vhandle.SnmpDecodePacket(data)
-		if e := time.Since(stime); e > (time.Second * 1) {
-			t.Errorf("SnmpDecodePacket() took too long: %s", e)
-		}
-	})
 }
