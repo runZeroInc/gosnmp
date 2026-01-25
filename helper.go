@@ -818,7 +818,7 @@ func parseUint32(bytes []byte) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	return uint32(ret), nil
+	return uint32(ret), nil //nolint:gosec
 }
 
 // parseUint treats the given bytes as a big-endian, signed integer and returns
@@ -831,7 +831,7 @@ func parseUint(bytes []byte) (uint, error) {
 	if ret64 != uint64(uint(ret64)) {
 		return 0, ErrIntegerTooLarge
 	}
-	return uint(ret64), nil //nolint:gosec
+	return uint(ret64), nil
 }
 
 func parseFloat32(bytes []byte) (float32, error) {

@@ -348,7 +348,7 @@ sendRetry:
 					}
 				}
 
-				if !(isReport && noAuth) {
+				if !(isReport && noAuth) { //nolint:staticcheck
 					if err = x.testAuthentication(resp, result, useResponseSecurityParameters); err != nil {
 						x.Logger.Printf("ERROR on Test Authentication on v3: %s", err)
 						break
@@ -394,9 +394,9 @@ sendRetry:
 			// Other REPORT OIDs are returned as errors.
 			if result.Version == Version3 && result.PDUType == Report && len(result.Variables) == 1 {
 				// Adopt authoritative params from the REPORT into the session USM
-				if err := x.storeSecurityParameters(result); err != nil {
-					x.Logger.Printf("SNMPv3: storeSecurityParameters failed: %v", err)
-					return result, err
+				if errSP := x.storeSecurityParameters(result); errSP != nil {
+					x.Logger.Printf("SNMPv3: storeSecurityParameters failed: %v", errSP)
+					return result, errSP
 				}
 
 				switch oid := result.Variables[0].Name; oid {
@@ -414,9 +414,9 @@ sendRetry:
 					}
 					retriedReport = true
 					// Re-inject the stored authoritative params into the outgoing packet
-					if err := x.updatePktSecurityParameters(packetOut); err != nil {
-						x.Logger.Printf("SNMPv3: updatePktSecurityParameters failed: %v", err)
-						return result, err
+					if errSP := x.updatePktSecurityParameters(packetOut); errSP != nil {
+						x.Logger.Printf("SNMPv3: updatePktSecurityParameters failed: %v", errSP)
+						return result, errSP
 					}
 					// (Optional safety) ensure the packet holds a fresh copy
 					if x.Version == Version3 && x.SecurityParameters != nil {
@@ -1126,8 +1126,8 @@ func (x *GoSNMP) unmarshalResponse(packet []byte, response *SnmpPacket) error {
 		}
 
 		if errorStatus, ok := rawError.(int); ok {
-			response.Error = SNMPError(errorStatus) //nolint:gosec
-			x.Logger.Printf("errorStatus: %d", uint8(errorStatus))
+			response.Error = SNMPError(errorStatus)                //nolint:gosec
+			x.Logger.Printf("errorStatus: %d", uint8(errorStatus)) //nolint:gosec
 		}
 
 		// Parse Error-Index
@@ -1141,8 +1141,8 @@ func (x *GoSNMP) unmarshalResponse(packet []byte, response *SnmpPacket) error {
 		}
 
 		if errorindex, ok := rawErrorIndex.(int); ok {
-			response.ErrorIndex = uint8(errorindex) //nolint:gosec
-			x.Logger.Printf("error-index: %d", uint8(errorindex))
+			response.ErrorIndex = uint8(errorindex)               //nolint:gosec
+			x.Logger.Printf("error-index: %d", uint8(errorindex)) //nolint:gosec
 		}
 	}
 

@@ -82,7 +82,7 @@ func SaveFuzzInputsToCache(cacheDir, funcName string, inputs [][]byte) error {
 	sort.Strings(uvals)
 
 	for _, input := range uvals {
-		_, err := fd.WriteString(fmt.Sprintf("%q\n", string(input)))
+		_, err := fd.WriteString(fmt.Sprintf("%q\n", input))
 		if err != nil {
 			return fmt.Errorf("failed to write to cache file %s: %v", dstFile, err)
 		}
@@ -138,16 +138,11 @@ func LoadGoFuzzCacheFile(fname string) ([]byte, error) {
 	return input, nil
 }
 
-// encVersion1 will be the first line of a file with version 1 encoding.
-var encVersion1 = "go test fuzz v1"
-
 // SaveGoFuzzCacheFile write a go fuzz v1 files for single []byte inputs.
 func SaveGoFuzzCacheFile(baseDir string, data [][]byte) error {
 	for _, tc := range data {
-
 		// https://cs.opensource.google/go/go/+/master:src/internal/fuzz/encoding.go;l=19?q=encVersion1&ss=go%2Fgo
-		data := fmt.Appendf(nil, "%s\n[]byte(%q)\n", encVersion1, tc)
-
+		data := fmt.Appendf(nil, "go test fuzz v1\n[]byte(%q)\n", tc)
 		// https://cs.opensource.google/go/go/+/master:src/internal/fuzz/fuzz.go;l=1049
 		dsum := sha256.Sum256(data)
 		name := fmt.Sprintf("%x", dsum)[:16]
