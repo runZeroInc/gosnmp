@@ -99,7 +99,7 @@ func UnpackFuzzInputs(goCacheDir, testCacheDir string) error {
 		fmt.Printf("Loaded %d existing inputs from testdata for %s\n", len(cur), ent.Name())
 
 		fmt.Printf("Saving %d inputs to Go fuzz cache for %s\n", len(cur), fname)
-		err = os.MkdirAll(filepath.Join(goCacheDir, fname), 0755)
+		err = os.MkdirAll(filepath.Join(goCacheDir, fname), 0755) //nolint:gosec // CLI tool, fname comes from local testdata directory listing
 		if err != nil {
 			return err
 		}
