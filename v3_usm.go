@@ -930,6 +930,13 @@ func (sp *UsmSecurityParameters) decryptPacket(packet []byte, cursor int) ([]byt
 		if len(packet[cursorTmp:])%des.BlockSize != 0 {
 			return nil, errors.New("error decrypting ScopedPDU: not multiple of des block size")
 		}
+		// msgPrivacyParameters is the DES-CBC pre-IV salt and must be at
+		// least 8 bytes. It is copied verbatim from the remote agent's
+		// response in unmarshal(), so reject a short value rather than
+		// indexing out of bounds in the pre-IV loop below.
+		if len(sp.PrivacyParameters) < 8 {
+			return nil, errors.New("error decrypting ScopedPDU: DES privacy parameters too short")
+		}
 		preiv := sp.PrivacyKey[8:]
 		var iv [8]byte
 		for i := range len(iv) {
@@ -1093,7 +1100,17 @@ func (sp *UsmSecurityParameters) unmarshal(flags SnmpV3MsgFlags, packet []byte, 
 		if sp.AuthenticationProtocol <= NoAuth {
 			return 0, errors.New("error parsing SNMPv3 User Security Model: authentication parameters are not configured to parse incoming authenticated message")
 		}
-		copy(packet[cursor+2:cursor+len(macVarbinds[sp.AuthenticationProtocol])], macVarbinds[sp.AuthenticationProtocol][2:])
+		// The blanking slice below uses the CONFIGURED protocol's digest
+		// length (macVarbinds[proto]) for its high bound, not the length
+		// actually parsed from the (attacker-controlled) packet. A short or
+		// truncated msgAuthenticationParameters near the end of the buffer
+		// would make cursor+len(macVarbinds[proto]) exceed len(packet) and
+		// panic. Validate the bounds before slicing.
+		authFieldEnd := cursor + len(macVarbinds[sp.AuthenticationProtocol])
+		if cursor+2 > authFieldEnd || authFieldEnd > len(packet) {
+			return 0, errors.New("error parsing SNMPv3 User Security Model: truncated authentication parameters")
+		}
+		copy(packet[cursor+2:authFieldEnd], macVarbinds[sp.AuthenticationProtocol][2:])
 	}
 	cursor += count
 
